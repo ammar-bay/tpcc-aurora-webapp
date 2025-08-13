@@ -287,7 +287,7 @@ class AuroraDSQLConnector(BaseDatabaseConnector):
                 # 4. Insert into orders
                 cur.execute(
                     """
-                    INSERT INTO orders (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_carrier_id, o_ol_cnt, o_all_local)
+                    INSERT INTO orders (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_carrier_id, o_ol_cnt, o_all_local, region_created)
                     VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, NULL, %s, %s, NULL)
                     """,
                     (next_o_id, district_id, warehouse_id, customer_id, o_ol_cnt, o_all_local)
