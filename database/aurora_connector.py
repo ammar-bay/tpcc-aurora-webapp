@@ -228,61 +228,144 @@ class AuroraDSQLConnector(BaseDatabaseConnector):
         items: List[Dict[str, Any]]
     ) -> int:
         """
-        Create a new order in the TPC-C style schema.
-
+        Execute TPC-C New Order transaction.
+        
         Args:
-            warehouse_id (int): Warehouse ID where the order is placed.
-            district_id (int): District ID within the warehouse.
-            customer_id (int): Customer placing the order.
-            items (List[Dict[str, Any]]): List of order items, each dict containing:
-                - item_id (int)
-                - supply_warehouse_id (int)
-                - quantity (int)
-                - price (float)
-
+            warehouse_id (int)
+            district_id (int)
+            customer_id (int)
+            items (list of dict): [{'item_id': int, 'quantity': int}]
+        
         Returns:
-            int: The newly created order ID.
+            int: new order ID
         """
         try:
             if not self.connection:
                 self._connect()
 
             with self.connection.cursor() as cur:
-                # 1. Insert into orders table and get order_id
+                # 1. Get next order ID for district
                 cur.execute(
                     """
-                    INSERT INTO orders (warehouse_id, district_id, customer_id, entry_date)
-                    VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
-                    RETURNING order_id
+                    SELECT d_next_o_id FROM district
+                    WHERE d_w_id = %s AND d_id = %s
+                    FOR UPDATE
+                    """,
+                    (warehouse_id, district_id)
+                )
+                d_row = cur.fetchone()
+                if not d_row:
+                    raise ValueError("District not found")
+                next_o_id = d_row["d_next_o_id"]
+
+                # 2. Increment district next order ID
+                cur.execute(
+                    """
+                    UPDATE district
+                    SET d_next_o_id = d_next_o_id + 1
+                    WHERE d_w_id = %s AND d_id = %s
+                    """,
+                    (warehouse_id, district_id)
+                )
+
+                # 3. Get customer info for discount, credit, etc.
+                cur.execute(
+                    """
+                    SELECT c_discount, c_credit, c_last
+                    FROM customer
+                    WHERE c_w_id = %s AND c_d_id = %s AND c_id = %s
                     """,
                     (warehouse_id, district_id, customer_id)
                 )
-                order_id = cur.fetchone()["order_id"]
+                customer = cur.fetchone()
+                if not customer:
+                    raise ValueError("Customer not found")
 
-                # 2. Insert order lines
+                o_ol_cnt = len(items)
+                o_all_local = 1  # assuming all items from local warehouse
+
+                # 4. Insert into orders
+                cur.execute(
+                    """
+                    INSERT INTO orders (o_id, o_d_id, o_w_id, o_c_id, o_entry_d, o_carrier_id, o_ol_cnt, o_all_local)
+                    VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, NULL, %s, %s)
+                    """,
+                    (next_o_id, district_id, warehouse_id, customer_id, o_ol_cnt, o_all_local)
+                )
+
+                # 5. Insert into new_order
+                cur.execute(
+                    """
+                    INSERT INTO new_order (no_o_id, no_d_id, no_w_id)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (next_o_id, district_id, warehouse_id)
+                )
+
+                # 6. Process each item
                 for line_number, item in enumerate(items, start=1):
+                    item_id = item["item_id"]
+                    quantity = item["quantity"]
+
+                    # Get item price
+                    cur.execute(
+                        "SELECT i_price FROM item WHERE i_id = %s",
+                        (item_id,)
+                    )
+                    item_row = cur.fetchone()
+                    if not item_row:
+                        raise ValueError(f"Item {item_id} not found")
+                    price = item_row["i_price"]
+
+                    # Update stock
+                    cur.execute(
+                        """
+                        SELECT s_quantity, s_ytd, s_order_cnt, s_remote_cnt
+                        FROM stock
+                        WHERE s_w_id = %s AND s_i_id = %s
+                        FOR UPDATE
+                        """,
+                        (warehouse_id, item_id)
+                    )
+                    stock = cur.fetchone()
+                    if not stock:
+                        raise ValueError(f"Stock for item {item_id} not found")
+
+                    new_qty = stock["s_quantity"] - quantity
+                    if new_qty < 10:
+                        new_qty += 100  # TPC-C wrap-around
+
+                    cur.execute(
+                        """
+                        UPDATE stock
+                        SET s_quantity = %s,
+                            s_ytd = s_ytd + %s,
+                            s_order_cnt = s_order_cnt + 1
+                        WHERE s_w_id = %s AND s_i_id = %s
+                        """,
+                        (new_qty, quantity, warehouse_id, item_id)
+                    )
+
+                    # Insert into order_line
+                    ol_amount = quantity * price
                     cur.execute(
                         """
                         INSERT INTO order_line (
-                            order_id, line_number, item_id,
-                            supply_warehouse_id, quantity, price, amount
+                            ol_o_id, ol_d_id, ol_w_id, ol_number,
+                            ol_i_id, ol_supply_w_id, ol_delivery_d, ol_quantity, ol_amount, ol_dist_info
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, NULL, %s, %s, %s)
                         """,
                         (
-                            order_id,
-                            line_number,
-                            item["item_id"],
-                            item["supply_warehouse_id"],
-                            item["quantity"],
-                            item["price"],
-                            item["quantity"] * item["price"]
+                            next_o_id, district_id, warehouse_id, line_number,
+                            item_id, warehouse_id, quantity, ol_amount, "S_DIST_INFO"
                         )
                     )
 
+                # 7. Commit transaction
                 self.connection.commit()
-                logger.info(f"New order {order_id} created with {len(items)} items.")
-                return order_id
+                logger.info(f"New order {next_o_id} created for customer {customer_id}")
+                return next_o_id
 
         except Exception as e:
             logger.error(f"Failed to execute new order: {str(e)}")
