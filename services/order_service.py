@@ -42,26 +42,26 @@ class OrderService:
                 # Update the order with region information
                 try:
                     # For Spanner, we need to use a different approach since it handles parameters differently
-                    from database.spanner_connector import SpannerConnector
+                    # from database.spanner_connector import SpannerConnector
 
-                    if isinstance(self.db, SpannerConnector):
-                        # For Spanner, we'll use the transaction-based approach within the connector
-                        # Skip the region update here since Spanner handles it differently
-                        logger.info(
-                            f"Spanner order created with region tracking: {self.region_name}"
-                        )
-                    else:
+                    # if isinstance(self.db, SpannerConnector):
+                    #     # For Spanner, we'll use the transaction-based approach within the connector
+                    #     # Skip the region update here since Spanner handles it differently
+                    #     logger.info(
+                    #         f"Spanner order created with region tracking: {self.region_name}"
+                    #     )
+                    # else:
                         # For other databases
-                        self.db.execute_query(
-                            "UPDATE orders SET region_created = %s WHERE o_id = %s AND o_d_id = %s AND o_w_id = %s",
-                            (
-                                self.region_name,
-                                result["order_id"],
-                                district_id,
-                                warehouse_id,
-                            ),
-                        )
-                        logger.info(f"Order region updated to: {self.region_name}")
+                    self.db.execute_query(
+                        "UPDATE orders SET region_created = %s WHERE o_id = %s AND o_d_id = %s AND o_w_id = %s",
+                        (
+                            self.region_name,
+                            result["order_id"],
+                            district_id,
+                            warehouse_id,
+                        ),
+                    )
+                    logger.info(f"Order region updated to: {self.region_name}")
                 except Exception as update_error:
                     logger.warning(
                         f"Failed to update region information: {str(update_error)}"
