@@ -122,6 +122,8 @@ class AuroraDSQLConnector(BaseDatabaseConnector):
                 sslmode="require",  # DSQL requires SSL
                 cursor_factory=psycopg2.extras.RealDictCursor,
             )
+            # Enable autocommit
+            self.connection.autocommit = True
             elapsed = time.time() - start_time
             logger.info(f"Connected to Aurora DSQL in {elapsed:.2f}s")
         except OperationalError as e:
