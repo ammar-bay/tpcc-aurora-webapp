@@ -365,7 +365,7 @@ class AuroraDSQLConnector(BaseDatabaseConnector):
                 # 7. Commit transaction
                 self.connection.commit()
                 logger.info(f"New order {next_o_id} created for customer {customer_id}")
-                return next_o_id
+                return {"success": True, "order_id": next_o_id}
 
         except Exception as e:
             logger.error(f"Failed to execute new order: {str(e)}")
