@@ -219,3 +219,73 @@ class AuroraDSQLConnector(BaseDatabaseConnector):
                 self.connection = None
         except Exception as e:
             logger.error(f"Connection cleanup failed: {str(e)}")
+
+    def execute_new_order(
+        self,
+        warehouse_id: int,
+        district_id: int,
+        customer_id: int,
+        items: List[Dict[str, Any]]
+    ) -> int:
+        """
+        Create a new order in the TPC-C style schema.
+
+        Args:
+            warehouse_id (int): Warehouse ID where the order is placed.
+            district_id (int): District ID within the warehouse.
+            customer_id (int): Customer placing the order.
+            items (List[Dict[str, Any]]): List of order items, each dict containing:
+                - item_id (int)
+                - supply_warehouse_id (int)
+                - quantity (int)
+                - price (float)
+
+        Returns:
+            int: The newly created order ID.
+        """
+        try:
+            if not self.connection:
+                self._connect()
+
+            with self.connection.cursor() as cur:
+                # 1. Insert into orders table and get order_id
+                cur.execute(
+                    """
+                    INSERT INTO orders (warehouse_id, district_id, customer_id, entry_date)
+                    VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+                    RETURNING order_id
+                    """,
+                    (warehouse_id, district_id, customer_id)
+                )
+                order_id = cur.fetchone()["order_id"]
+
+                # 2. Insert order lines
+                for line_number, item in enumerate(items, start=1):
+                    cur.execute(
+                        """
+                        INSERT INTO order_line (
+                            order_id, line_number, item_id,
+                            supply_warehouse_id, quantity, price, amount
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            order_id,
+                            line_number,
+                            item["item_id"],
+                            item["supply_warehouse_id"],
+                            item["quantity"],
+                            item["price"],
+                            item["quantity"] * item["price"]
+                        )
+                    )
+
+                self.connection.commit()
+                logger.info(f"New order {order_id} created with {len(items)} items.")
+                return order_id
+
+        except Exception as e:
+            logger.error(f"Failed to execute new order: {str(e)}")
+            if self.connection:
+                self.connection.rollback()
+            raise
